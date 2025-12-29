@@ -1,88 +1,78 @@
 /**
  * Camp Registration Tracking System - Apps Script
- * Processes roster data from Paste Report tab and updates Master Data
- * Handles multi-year data with intelligent deduplication and cancellation tracking
+ * Simple, working version that actually does what it's supposed to do
  *
- * FIXED VERSION - Properly handles data replacement and cancellation tracking
+ * Paste roster → Detect program/year → Replace that program/year's data → Track cancellations
  */
 
-// Configuration
-const CONFIG = {
-  PASTE_SHEET: "Paste Report",
-  MASTER_SHEET: "Master Data",
-  CANCELLATION_SHEET: "Cancellations",
-  HEADER_ROW: 1,
-  DATA_START_ROW: 2
+// Sheet names
+const PASTE_SHEET = "Paste Report";
+const MASTER_SHEET = "Master Data";
+const CANCEL_SHEET = "Cancellations";
+
+// Column indices in CSV (0-based)
+const COL = {
+  MEMBER_ID: 1,      // Member ID
+  FIRST_NAME: 2,     // First Name
+  LAST_NAME: 3,      // Last Name
+  PROGRAM: 25,       // Program
+  PROGRAM_START: 27, // Program Start
+  SITE: 24,          // Site
+  INSTANCE: 30       // Instance Name
 };
-
-// Required columns from CSV (these must be present)
-const REQUIRED_COLUMNS = [
-  'Member ID',
-  'Program',
-  'Site',
-  'Instance Name',
-  'Program Start',
-  'First Name',
-  'Last Name'
-];
-
-// Calculated columns that will be added
-const CALCULATED_COLUMNS = [
-  'Year',
-  'WeekNumber',
-  'SiteDisplay',
-  'DateProcessed',
-  'LastUpdated'
-];
 
 /**
  * Creates custom menu when spreadsheet opens
  */
 function onOpen() {
-  const ui = SpreadsheetApp.getUi();
-  ui.createMenu('📊 Camp Registration')
+  SpreadsheetApp.getUi()
+    .createMenu('📊 Camp Registration')
     .addItem('▶️ Process Updates', 'processRosterUpdate')
-    .addSeparator()
     .addItem('🔄 Clear Paste Report', 'clearPasteReport')
-    .addItem('ℹ️ Show Instructions', 'showInstructions')
     .addToUi();
 }
 
 /**
- * Main function to process roster updates
+ * Main processing function
  */
 function processRosterUpdate() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const ui = SpreadsheetApp.getUi();
 
   try {
-    // Step 1: Get and validate paste report data
-    const pasteSheet = ss.getSheetByName(CONFIG.PASTE_SHEET);
+    // Step 1: Get paste data
+    const pasteSheet = ss.getSheetByName(PASTE_SHEET);
     if (!pasteSheet) {
       throw new Error("Paste Report sheet not found");
     }
 
-    const pasteData = pasteSheet.getDataRange().getValues();
-    if (pasteData.length <= 1) {
-      ui.alert('⚠️ No Data', 'Please paste roster data before processing.', ui.ButtonSet.OK);
+    const lastRow = pasteSheet.getLastRow();
+    const lastCol = pasteSheet.getLastColumn();
+
+    if (lastRow < 2) {
+      ui.alert('⚠️ No Data', 'Please paste roster data into Paste Report tab starting at A1.', ui.ButtonSet.OK);
       return;
     }
 
-    // Step 2: Validate required columns
-    const pasteHeaders = pasteData[0];
-    const missingColumns = REQUIRED_COLUMNS.filter(col => !pasteHeaders.includes(col));
-    if (missingColumns.length > 0) {
-      throw new Error(`Missing required columns: ${missingColumns.join(', ')}`);
+    // Get all data including headers
+    const pasteData = pasteSheet.getRange(1, 1, lastRow, lastCol).getValues();
+    const headers = pasteData[0];
+
+    // Validate we have required columns
+    if (headers[COL.MEMBER_ID] !== 'Member ID' || headers[COL.PROGRAM] !== 'Program') {
+      throw new Error('Invalid data format. Make sure you paste with headers starting at A1.');
     }
 
-    // Step 3: Extract metadata from first data row
-    const firstRow = pasteData[1];
-    const metadata = extractMetadata(firstRow, pasteHeaders);
+    // Step 2: Detect program and year from first data row
+    const firstDataRow = pasteData[1];
+    const program = normalizeProgram(firstDataRow[COL.PROGRAM]);
+    const year = extractYear(firstDataRow[COL.PROGRAM_START]);
+    const rowCount = pasteData.length - 1; // excluding header
 
-    // Step 4: Confirm with user
+    // Step 3: Confirm with user
     const response = ui.alert(
-      '🔍 Detected Data',
-      `Program: ${metadata.program}\nYear: ${metadata.year}\nRows: ${pasteData.length - 1}\n\nProceed with update?`,
+      '🔍 Ready to Process',
+      `Program: ${program}\nYear: ${year}\nRows: ${rowCount}\n\nThis will REPLACE all existing ${program} ${year} data.\n\nContinue?`,
       ui.ButtonSet.YES_NO
     );
 
@@ -90,44 +80,273 @@ function processRosterUpdate() {
       return;
     }
 
-    // Step 5: Process and update
-    const result = processAndUpdate(ss, pasteData, pasteHeaders, metadata);
+    // Step 4: Process the data
+    const processedData = processData(pasteData, headers, program, year);
 
-    // Step 6: Show results
-    const cancelMsg = result.cancellations > 0
-      ? `\n⚠️ ${result.cancellations} cancellations detected (see Cancellations tab)`
+    // Step 5: Merge with existing Master Data
+    const result = mergeWithMaster(ss, processedData, program, year);
+
+    // Step 6: Log cancellations if any
+    if (result.cancellations.length > 0) {
+      logCancellations(ss, result.cancellations);
+    }
+
+    // Step 7: Success message
+    const cancelMsg = result.cancellations.length > 0
+      ? `\n⚠️ Cancellations: ${result.cancellations.length} (see Cancellations tab)`
       : '';
 
     ui.alert(
       '✅ Update Complete',
-      `Program: ${metadata.program}\nYear: ${metadata.year}\n\n` +
-      `✨ New registrations: ${result.newCount}\n` +
-      `🔄 Updated existing: ${result.updatedCount}\n` +
-      `📋 Total active: ${result.totalCount}${cancelMsg}`,
+      `Program: ${program}\nYear: ${year}\n\n` +
+      `New registrations: ${result.newCount}\n` +
+      `Updated existing: ${result.updatedCount}\n` +
+      `Total in Master Data: ${result.totalCount}${cancelMsg}`,
       ui.ButtonSet.OK
     );
 
   } catch (error) {
     ui.alert('❌ Error', error.toString(), ui.ButtonSet.OK);
-    Logger.log('Error in processRosterUpdate: ' + error);
+    Logger.log('Error: ' + error.toString());
     Logger.log(error.stack);
   }
 }
 
 /**
- * Extract metadata (year, program) from data row
+ * Process paste data: add calculated columns to each row
+ * Returns: { headers: [...], rows: [[...], [...], ...] }
  */
-function extractMetadata(row, headers) {
-  const programCol = headers.indexOf('Program');
-  const programStartCol = headers.indexOf('Program Start');
+function processData(pasteData, csvHeaders, program, year) {
+  const now = new Date();
 
-  const programValue = row[programCol];
-  const programStartValue = row[programStartCol];
+  // Build new headers: CSV headers + calculated columns
+  const newHeaders = [
+    ...csvHeaders,
+    'Year',
+    'WeekNumber',
+    'SiteDisplay',
+    'DateProcessed',
+    'LastUpdated'
+  ];
+
+  // Process each data row
+  const processedRows = [];
+
+  for (let i = 1; i < pasteData.length; i++) {
+    const csvRow = pasteData[i];
+
+    // Skip empty rows
+    if (!csvRow[COL.MEMBER_ID]) continue;
+
+    // Add calculated columns
+    const newRow = [
+      ...csvRow,
+      year,                                    // Year
+      extractWeekNumber(csvRow[COL.INSTANCE]), // WeekNumber
+      cleanSiteName(csvRow[COL.SITE]),        // SiteDisplay
+      now,                                     // DateProcessed
+      now                                      // LastUpdated
+    ];
+
+    processedRows.push(newRow);
+  }
 
   return {
-    year: extractYear(programStartValue),
-    program: identifyProgram(programValue)
+    headers: newHeaders,
+    rows: processedRows
   };
+}
+
+/**
+ * Merge new data with existing Master Data
+ * Returns: { masterRows: [[...]], cancellations: [...], newCount: 0, updatedCount: 0, totalCount: 0 }
+ */
+function mergeWithMaster(ss, processedData, program, year) {
+  let masterSheet = ss.getSheetByName(MASTER_SHEET);
+
+  // If Master Data doesn't exist, create it and write all data
+  if (!masterSheet) {
+    masterSheet = ss.insertSheet(MASTER_SHEET);
+    const allRows = [processedData.headers, ...processedData.rows];
+    writeMasterSheet(masterSheet, allRows);
+
+    return {
+      masterRows: allRows,
+      cancellations: [],
+      newCount: processedData.rows.length,
+      updatedCount: 0,
+      totalCount: processedData.rows.length
+    };
+  }
+
+  // Master Data exists - need to merge
+  const existingData = masterSheet.getDataRange().getValues();
+  const existingHeaders = existingData[0];
+
+  // Find column indices in existing Master Data
+  const existingCols = {
+    memberId: existingHeaders.indexOf('Member ID'),
+    program: existingHeaders.indexOf('Program'),
+    site: existingHeaders.indexOf('Site'),
+    instance: existingHeaders.indexOf('Instance Name'),
+    year: existingHeaders.indexOf('Year'),
+    firstName: existingHeaders.indexOf('First Name'),
+    lastName: existingHeaders.indexOf('Last Name'),
+    dateProcessed: existingHeaders.indexOf('DateProcessed')
+  };
+
+  // Find column indices in new data
+  const newCols = {
+    memberId: processedData.headers.indexOf('Member ID'),
+    program: processedData.headers.indexOf('Program'),
+    site: processedData.headers.indexOf('Site'),
+    instance: processedData.headers.indexOf('Instance Name'),
+    year: processedData.headers.indexOf('Year'),
+    dateProcessed: processedData.headers.indexOf('DateProcessed'),
+    lastUpdated: processedData.headers.indexOf('LastUpdated')
+  };
+
+  // Build composite key for new data
+  const newDataMap = new Map();
+  processedData.rows.forEach(row => {
+    const key = buildKey(
+      row[newCols.memberId],
+      row[newCols.program],
+      row[newCols.site],
+      row[newCols.instance],
+      row[newCols.year]
+    );
+    newDataMap.set(key, row);
+  });
+
+  // Process existing data
+  const rowsToKeep = [];
+  const existingKeys = new Set();
+  const cancellations = [];
+  let updatedCount = 0;
+
+  for (let i = 1; i < existingData.length; i++) {
+    const row = existingData[i];
+    const rowProgram = normalizeProgram(row[existingCols.program]);
+    const rowYear = parseInt(row[existingCols.year]);
+
+    // Keep rows from other programs/years unchanged
+    if (rowProgram !== program || rowYear !== year) {
+      rowsToKeep.push(row);
+      continue;
+    }
+
+    // This row is from the program/year being updated
+    const key = buildKey(
+      row[existingCols.memberId],
+      row[existingCols.program],
+      row[existingCols.site],
+      row[existingCols.instance],
+      row[existingCols.year]
+    );
+
+    if (newDataMap.has(key)) {
+      // This registration still exists - update it
+      const newRow = newDataMap.get(key);
+      // Preserve original DateProcessed
+      newRow[newCols.dateProcessed] = row[existingCols.dateProcessed];
+      // Update LastUpdated
+      newRow[newCols.lastUpdated] = new Date();
+      rowsToKeep.push(newRow);
+      existingKeys.add(key);
+      updatedCount++;
+    } else {
+      // This registration is gone - it's a cancellation
+      cancellations.push({
+        memberId: row[existingCols.memberId],
+        firstName: row[existingCols.firstName] || '',
+        lastName: row[existingCols.lastName] || '',
+        program: rowProgram,
+        site: row[existingCols.site],
+        instance: row[existingCols.instance],
+        year: rowYear
+      });
+    }
+  }
+
+  // Add brand new registrations
+  let newCount = 0;
+  processedData.rows.forEach(row => {
+    const key = buildKey(
+      row[newCols.memberId],
+      row[newCols.program],
+      row[newCols.site],
+      row[newCols.instance],
+      row[newCols.year]
+    );
+    if (!existingKeys.has(key)) {
+      rowsToKeep.push(row);
+      newCount++;
+    }
+  });
+
+  // Prepare final data with headers
+  const allRows = [processedData.headers, ...rowsToKeep];
+
+  // Write to Master Data
+  writeMasterSheet(masterSheet, allRows);
+
+  return {
+    masterRows: allRows,
+    cancellations: cancellations,
+    newCount: newCount,
+    updatedCount: updatedCount,
+    totalCount: rowsToKeep.length
+  };
+}
+
+/**
+ * Write data to Master Data sheet
+ */
+function writeMasterSheet(sheet, rows) {
+  // Clear existing content
+  sheet.clear();
+
+  if (rows.length === 0) return;
+
+  // Write all data
+  sheet.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
+
+  // Format header row
+  sheet.getRange(1, 1, 1, rows[0].length)
+    .setFontWeight('bold')
+    .setBackground('#4285f4')
+    .setFontColor('white');
+
+  // Freeze header row
+  sheet.setFrozenRows(1);
+}
+
+/**
+ * Build composite key for deduplication
+ */
+function buildKey(memberId, program, site, instance, year) {
+  return `${memberId}|${normalizeProgram(program)}|${site}|${instance}|${year}`;
+}
+
+/**
+ * Normalize program name for consistent comparison
+ */
+function normalizeProgram(programName) {
+  if (!programName) return '';
+
+  const str = String(programName).toLowerCase();
+
+  if (str.includes('camp winnebago')) {
+    return 'Camp Winnebago';
+  } else if (str.includes('adventure camps (say/neb)')) {
+    return 'Adventure Camps (SAY/NEB)';
+  } else if (str.includes('adventure camp (good shepherd)')) {
+    return 'Adventure Camp (Good Shepherd)';
+  }
+
+  // Return as-is if no match
+  return programName;
 }
 
 /**
@@ -145,298 +364,15 @@ function extractYear(dateValue) {
 }
 
 /**
- * Identify program type from Program column value
- */
-function identifyProgram(programString) {
-  const programLower = String(programString).toLowerCase();
-
-  if (programLower.includes('camp winnebago')) {
-    return 'Camp Winnebago';
-  } else if (programLower.includes('adventure camps (say/neb)')) {
-    return 'Adventure Camps (SAY/NEB)';
-  } else if (programLower.includes('adventure camp (good shepherd)')) {
-    return 'Adventure Camp (Good Shepherd)';
-  }
-
-  return programString;
-}
-
-/**
- * Main processing function - handles all data transformation and updates
- */
-function processAndUpdate(ss, pasteData, pasteHeaders, metadata) {
-  const now = new Date();
-
-  // Build column mapping for paste data
-  const pasteMap = buildColumnMap(pasteHeaders);
-
-  // Process new data into normalized format
-  const newRecords = [];
-  for (let i = 1; i < pasteData.length; i++) {
-    const row = pasteData[i];
-
-    // Skip empty rows
-    if (!row[pasteMap['Member ID']]) continue;
-
-    const record = buildRecord(row, pasteMap, metadata, now);
-    newRecords.push(record);
-  }
-
-  // Get or create master sheet
-  let masterSheet = ss.getSheetByName(CONFIG.MASTER_SHEET);
-  const isNewSheet = !masterSheet;
-
-  if (isNewSheet) {
-    masterSheet = ss.insertSheet(CONFIG.MASTER_SHEET);
-  }
-
-  // Get existing master data
-  let existingRecords = [];
-  if (!isNewSheet && masterSheet.getLastRow() > 0) {
-    const masterData = masterSheet.getDataRange().getValues();
-    const masterHeaders = masterData[0];
-    const masterMap = buildColumnMap(masterHeaders);
-
-    // Parse existing records
-    for (let i = 1; i < masterData.length; i++) {
-      const record = parseRecord(masterData[i], masterMap);
-      existingRecords.push(record);
-    }
-  }
-
-  // Perform intelligent merge
-  const mergeResult = mergeRecords(existingRecords, newRecords, metadata, now);
-
-  // Log cancellations if any
-  if (mergeResult.cancellations.length > 0) {
-    logCancellations(ss, mergeResult.cancellations);
-  }
-
-  // Write merged data back to master sheet
-  writeMasterData(masterSheet, mergeResult.records);
-
-  return {
-    newCount: mergeResult.newCount,
-    updatedCount: mergeResult.updatedCount,
-    totalCount: mergeResult.records.length,
-    cancellations: mergeResult.cancellations.length
-  };
-}
-
-/**
- * Build column name to index mapping
- */
-function buildColumnMap(headers) {
-  const map = {};
-  headers.forEach((header, index) => {
-    map[header] = index;
-  });
-  return map;
-}
-
-/**
- * Build a normalized record object from row data
- */
-function buildRecord(row, columnMap, metadata, timestamp) {
-  const record = {
-    // Core fields
-    memberId: String(row[columnMap['Member ID']] || '').trim(),
-    program: metadata.program,
-    site: row[columnMap['Site']] || '',
-    instanceName: row[columnMap['Instance Name']] || '',
-    year: metadata.year,
-
-    // Calculated fields
-    weekNumber: extractWeekNumber(row[columnMap['Instance Name']]),
-    siteDisplay: cleanSiteName(row[columnMap['Site']]),
-
-    // Timestamps
-    dateProcessed: timestamp,
-    lastUpdated: timestamp,
-
-    // All original data (for preservation)
-    originalData: {}
-  };
-
-  // Store all original columns
-  for (const [colName, colIndex] of Object.entries(columnMap)) {
-    record.originalData[colName] = row[colIndex];
-  }
-
-  return record;
-}
-
-/**
- * Parse existing record from master data row
- */
-function parseRecord(row, columnMap) {
-  const record = {
-    memberId: String(row[columnMap['Member ID']] || '').trim(),
-    program: row[columnMap['Program']] || '',
-    site: row[columnMap['Site']] || '',
-    instanceName: row[columnMap['Instance Name']] || '',
-    year: parseInt(row[columnMap['Year']]) || 0,
-    weekNumber: row[columnMap['WeekNumber']] || '',
-    siteDisplay: row[columnMap['SiteDisplay']] || '',
-    dateProcessed: row[columnMap['DateProcessed']] || new Date(),
-    lastUpdated: row[columnMap['LastUpdated']] || new Date(),
-    originalData: {}
-  };
-
-  // Store all original columns
-  for (const [colName, colIndex] of Object.entries(columnMap)) {
-    record.originalData[colName] = row[colIndex];
-  }
-
-  return record;
-}
-
-/**
- * Build composite key for record identification
- */
-function buildKey(record) {
-  return `${record.memberId}|${record.program}|${record.site}|${record.instanceName}|${record.year}`;
-}
-
-/**
- * Merge existing and new records with intelligent deduplication
- * Returns: { records: [], cancellations: [], newCount: 0, updatedCount: 0 }
- */
-function mergeRecords(existingRecords, newRecords, metadata, now) {
-  const result = {
-    records: [],
-    cancellations: [],
-    newCount: 0,
-    updatedCount: 0
-  };
-
-  // Build map of new records by composite key
-  const newRecordMap = new Map();
-  newRecords.forEach(record => {
-    const key = buildKey(record);
-    newRecordMap.set(key, record);
-  });
-
-  // Track which new records we've seen
-  const processedNewKeys = new Set();
-
-  // Process existing records
-  existingRecords.forEach(existingRecord => {
-    const shouldUpdate = (
-      existingRecord.program === metadata.program &&
-      existingRecord.year === metadata.year
-    );
-
-    if (!shouldUpdate) {
-      // Keep records from other programs/years unchanged
-      result.records.push(existingRecord);
-      return;
-    }
-
-    // This record is from the program/year being updated
-    const key = buildKey(existingRecord);
-
-    if (newRecordMap.has(key)) {
-      // Record still exists - update it
-      const newRecord = newRecordMap.get(key);
-      newRecord.dateProcessed = existingRecord.dateProcessed; // Preserve original date
-      newRecord.lastUpdated = now; // Update timestamp
-      result.records.push(newRecord);
-      processedNewKeys.add(key);
-      result.updatedCount++;
-    } else {
-      // Record no longer exists - it's a cancellation
-      result.cancellations.push({
-        memberId: existingRecord.memberId,
-        firstName: existingRecord.originalData['First Name'] || '',
-        lastName: existingRecord.originalData['Last Name'] || '',
-        program: existingRecord.program,
-        site: existingRecord.siteDisplay || existingRecord.site,
-        weekNumber: existingRecord.weekNumber,
-        year: existingRecord.year
-      });
-    }
-  });
-
-  // Add new records that didn't exist before
-  newRecords.forEach(newRecord => {
-    const key = buildKey(newRecord);
-    if (!processedNewKeys.has(key)) {
-      result.records.push(newRecord);
-      result.newCount++;
-    }
-  });
-
-  return result;
-}
-
-/**
- * Write merged records to master sheet
- */
-function writeMasterData(sheet, records) {
-  // Clear existing content
-  sheet.clear();
-
-  if (records.length === 0) {
-    return;
-  }
-
-  // Get all unique column names from all records
-  const allColumns = new Set();
-  records.forEach(record => {
-    Object.keys(record.originalData).forEach(col => allColumns.add(col));
-  });
-
-  // Build final header list: original columns + calculated columns
-  const originalColumns = Array.from(allColumns);
-  const headers = [...originalColumns, ...CALCULATED_COLUMNS];
-
-  // Build rows
-  const rows = [headers];
-  records.forEach(record => {
-    const row = [];
-
-    // Add original data columns
-    originalColumns.forEach(colName => {
-      row.push(record.originalData[colName] || '');
-    });
-
-    // Add calculated columns
-    row.push(record.year);
-    row.push(record.weekNumber);
-    row.push(record.siteDisplay);
-    row.push(record.dateProcessed);
-    row.push(record.lastUpdated);
-
-    rows.push(row);
-  });
-
-  // Write to sheet
-  sheet.getRange(1, 1, rows.length, headers.length).setValues(rows);
-
-  // Format header
-  sheet.getRange(1, 1, 1, headers.length)
-    .setFontWeight('bold')
-    .setBackground('#4285f4')
-    .setFontColor('white');
-
-  sheet.setFrozenRows(1);
-
-  // Auto-resize columns
-  for (let i = 1; i <= headers.length; i++) {
-    sheet.autoResizeColumn(i);
-  }
-}
-
-/**
  * Extract week number from Instance Name
+ * Example: "Week 8: 7/28 - 8/1" → "Week 8"
  */
 function extractWeekNumber(instanceName) {
   if (!instanceName) return '';
 
   const str = String(instanceName);
 
-  // Check for "Pre-Camp"
+  // Check for Pre-Camp
   if (str.toLowerCase().includes('pre-camp')) {
     return 'Pre-Camp';
   }
@@ -465,12 +401,12 @@ function cleanSiteName(siteName) {
     '(GSY) Good Shepherd YMCA': 'Good Shep'
   };
 
-  // Exact match
+  // Try exact match first
   if (siteMap[str]) {
     return siteMap[str];
   }
 
-  // Partial match
+  // Try partial match
   for (const [key, value] of Object.entries(siteMap)) {
     if (str.includes(key)) {
       return value;
@@ -481,14 +417,14 @@ function cleanSiteName(siteName) {
 }
 
 /**
- * Log cancellations to dedicated sheet
+ * Log cancellations to Cancellations tab
  */
 function logCancellations(ss, cancellations) {
-  let cancelSheet = ss.getSheetByName(CONFIG.CANCELLATION_SHEET);
+  let cancelSheet = ss.getSheetByName(CANCEL_SHEET);
 
   // Create sheet if it doesn't exist
   if (!cancelSheet) {
-    cancelSheet = ss.insertSheet(CONFIG.CANCELLATION_SHEET);
+    cancelSheet = ss.insertSheet(CANCEL_SHEET);
     const headers = [
       'Date Detected',
       'Member ID',
@@ -496,7 +432,7 @@ function logCancellations(ss, cancellations) {
       'Last Name',
       'Program',
       'Site',
-      'Week',
+      'Instance',
       'Year'
     ];
 
@@ -518,14 +454,13 @@ function logCancellations(ss, cancellations) {
     c.lastName,
     c.program,
     c.site,
-    c.weekNumber,
+    c.instance,
     c.year
   ]);
 
   if (rows.length > 0) {
     const lastRow = cancelSheet.getLastRow();
-    const startRow = lastRow + 1;
-    cancelSheet.getRange(startRow, 1, rows.length, 8).setValues(rows);
+    cancelSheet.getRange(lastRow + 1, 1, rows.length, 8).setValues(rows);
   }
 }
 
@@ -534,8 +469,8 @@ function logCancellations(ss, cancellations) {
  */
 function clearPasteReport() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const pasteSheet = ss.getSheetByName(CONFIG.PASTE_SHEET);
   const ui = SpreadsheetApp.getUi();
+  const pasteSheet = ss.getSheetByName(PASTE_SHEET);
 
   if (!pasteSheet) {
     ui.alert('❌ Error', 'Paste Report sheet not found.', ui.ButtonSet.OK);
@@ -552,49 +487,4 @@ function clearPasteReport() {
     pasteSheet.clear();
     ui.alert('✅ Cleared', 'Paste Report has been cleared.', ui.ButtonSet.OK);
   }
-}
-
-/**
- * Show usage instructions
- */
-function showInstructions() {
-  const ui = SpreadsheetApp.getUi();
-  const message = `
-📋 HOW TO USE THIS TRACKER
-
-1️⃣ PASTE ROSTER DATA
-   • Download CSV from Daxko
-   • Go to "Paste Report" tab
-   • Copy ALL data from CSV (Ctrl+A in Excel/Sheets)
-   • Paste into cell A1 (important!)
-
-2️⃣ PROCESS UPDATES
-   • Menu: Camp Registration > Process Updates
-   • Confirm detected program and year
-   • System automatically:
-     ✓ Updates existing registrations
-     ✓ Adds new registrations
-     ✓ Detects cancellations
-
-3️⃣ VIEW RESULTS
-   • Master Data: All current registrations
-   • Cancellations: Dropped registrations
-   • All analysis tabs update automatically
-
-⚠️ IMPORTANT
-   • Always paste FULL roster (not partial)
-   • Start at cell A1
-   • Include header row
-   • Works with all 3 programs
-
-✨ FEATURES
-   • Smart deduplication (no duplicates!)
-   • Multi-year tracking
-   • Automatic cancellation detection
-   • Preserves historical data
-
-❓ Questions? Contact your administrator
-`;
-
-  ui.alert('📊 Camp Registration Tracker', message, ui.ButtonSet.OK);
 }
