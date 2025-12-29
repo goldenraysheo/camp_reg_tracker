@@ -28,9 +28,6 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('📊 Camp Registration')
     .addItem('▶️ Process Updates', 'processRosterUpdate')
-    .addItem('🔄 Clear Paste Report', 'clearPasteReport')
-    .addSeparator()
-    .addItem('📑 Organize Tabs', 'organizeTabs')
     .addToUi();
 }
 
@@ -93,10 +90,13 @@ function processRosterUpdate() {
       logCancellations(ss, result.cancellations);
     }
 
-    // Step 6.5: Organize tabs
+    // Step 6.5: Organize tabs and navigate to Overview Dashboard
     organizeTabs(ss);
 
-    // Step 7: Success message
+    // Step 7: Clear Paste Report
+    pasteSheet.clear();
+
+    // Step 8: Success message
     const cancelMsg = result.cancellations.length > 0
       ? `\n⚠️ Cancellations: ${result.cancellations.length} (see Cancellations tab)`
       : '';
@@ -495,7 +495,7 @@ function clearPasteReport() {
 }
 
 /**
- * Organize tabs in preferred order
+ * Organize tabs in preferred order and navigate to Overview Dashboard
  * Order: Paste Report, Overview Dashboard, Cancellations, Master Data
  */
 function organizeTabs(ss) {
@@ -519,9 +519,9 @@ function organizeTabs(ss) {
     }
   });
 
-  // Return to Paste Report tab
-  const pasteSheet = ss.getSheetByName(PASTE_SHEET);
-  if (pasteSheet) {
-    ss.setActiveSheet(pasteSheet);
+  // Navigate to Overview Dashboard
+  const overviewSheet = ss.getSheetByName('Overview Dashboard');
+  if (overviewSheet) {
+    ss.setActiveSheet(overviewSheet);
   }
 }
