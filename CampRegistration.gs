@@ -510,12 +510,15 @@ function organizeTabs(ss) {
     MASTER_SHEET
   ];
 
-  // Move each sheet to its desired position
-  desiredOrder.forEach((sheetName, targetIndex) => {
+  // Move sheets to desired positions (only if they exist)
+  let position = 1; // Start at position 1 (leftmost)
+  desiredOrder.forEach(sheetName => {
     const sheet = ss.getSheetByName(sheetName);
     if (sheet) {
+      // Only move if sheet exists
       ss.setActiveSheet(sheet);
-      ss.moveActiveSheet(targetIndex + 1); // Apps Script uses 1-based indexing for moveActiveSheet
+      ss.moveActiveSheet(position);
+      position++; // Increment for next sheet
     }
   });
 
