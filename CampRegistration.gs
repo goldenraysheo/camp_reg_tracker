@@ -29,6 +29,8 @@ function onOpen() {
     .createMenu('📊 Camp Registration')
     .addItem('▶️ Process Updates', 'processRosterUpdate')
     .addItem('🔄 Clear Paste Report', 'clearPasteReport')
+    .addSeparator()
+    .addItem('📑 Organize Tabs', 'organizeTabs')
     .addToUi();
 }
 
@@ -90,6 +92,9 @@ function processRosterUpdate() {
     if (result.cancellations.length > 0) {
       logCancellations(ss, result.cancellations);
     }
+
+    // Step 6.5: Organize tabs
+    organizeTabs(ss);
 
     // Step 7: Success message
     const cancelMsg = result.cancellations.length > 0
@@ -486,5 +491,37 @@ function clearPasteReport() {
   if (response === ui.Button.YES) {
     pasteSheet.clear();
     ui.alert('✅ Cleared', 'Paste Report has been cleared.', ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * Organize tabs in preferred order
+ * Order: Paste Report, Overview Dashboard, Cancellations, Master Data
+ */
+function organizeTabs(ss) {
+  if (!ss) {
+    ss = SpreadsheetApp.getActiveSpreadsheet();
+  }
+
+  const desiredOrder = [
+    PASTE_SHEET,
+    'Overview Dashboard',
+    CANCEL_SHEET,
+    MASTER_SHEET
+  ];
+
+  // Move each sheet to its desired position
+  desiredOrder.forEach((sheetName, targetIndex) => {
+    const sheet = ss.getSheetByName(sheetName);
+    if (sheet) {
+      ss.setActiveSheet(sheet);
+      ss.moveActiveSheet(targetIndex + 1); // Apps Script uses 1-based indexing for moveActiveSheet
+    }
+  });
+
+  // Return to Paste Report tab
+  const pasteSheet = ss.getSheetByName(PASTE_SHEET);
+  if (pasteSheet) {
+    ss.setActiveSheet(pasteSheet);
   }
 }
