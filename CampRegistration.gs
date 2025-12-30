@@ -79,24 +79,32 @@ function processRosterUpdate() {
       return;
     }
 
+    // Show progress indicator
+    ss.toast('Processing roster data...', '⏳ Working', -1);
+
     // Step 4: Process the data
     const processedData = processData(pasteData, headers, program, year);
 
     // Step 5: Merge with existing Master Data
+    ss.toast('Updating Master Data...', '⏳ Working', -1);
     const result = mergeWithMaster(ss, processedData, program, year);
 
     // Step 6: Log cancellations if any
     if (result.cancellations.length > 0) {
+      ss.toast('Logging cancellations...', '⏳ Working', -1);
       logCancellations(ss, result.cancellations);
     }
 
     // Step 6.5: Organize tabs and navigate to Overview Dashboard
+    ss.toast('Finalizing...', '⏳ Working', -1);
     organizeTabs(ss);
 
     // Step 7: Clear Paste Report
     pasteSheet.clear();
 
     // Step 8: Success message
+    ss.toast('Complete! 🎉', '✅ Success', 3);
+
     const cancelMsg = result.cancellations.length > 0
       ? `\n⚠️ Cancellations: ${result.cancellations.length} (see Cancellations tab)`
       : '';
