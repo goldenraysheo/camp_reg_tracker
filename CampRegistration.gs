@@ -9,7 +9,7 @@
 const PASTE_SHEET = "Paste Report";
 const MASTER_SHEET = "Master Data";
 const CANCEL_SHEET = "Cancellations";
-const REG_RECORDED_SHEET = "Reg Recorded";
+const REG_TRENDS_SHEET = "Reg Trends";
 
 // Column indices in CSV (0-based)
 const COL = {
@@ -557,20 +557,13 @@ function recordRegistrationSnapshot() {
     return;
   }
 
-  // Get or create Reg Recorded sheet
-  let regSheet = ss.getSheetByName(REG_RECORDED_SHEET);
+  // Get or create Reg Trends sheet
+  let regSheet = ss.getSheetByName(REG_TRENDS_SHEET);
+  const isNewSheet = !regSheet;
+
   if (!regSheet) {
-    regSheet = ss.insertSheet(REG_RECORDED_SHEET);
-
-    // Create headers
-    const headers = ['Updated', 'Camp', 'SAY', 'NEB', 'GS'];
-    regSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-    regSheet.getRange(1, 1, 1, headers.length)
-      .setFontWeight('bold')
-      .setBackground('#34a853')
-      .setFontColor('white');
+    regSheet = ss.insertSheet(REG_TRENDS_SHEET);
     regSheet.setFrozenRows(1);
-
     // Hide the sheet (users can unhide if needed)
     regSheet.hideSheet();
   }
@@ -582,12 +575,25 @@ function recordRegistrationSnapshot() {
   // Find column indices
   const programCol = masterHeaders.indexOf('Program');
   const siteDisplayCol = masterHeaders.indexOf('SiteDisplay');
+  const weekNumberCol = masterHeaders.indexOf('WeekNumber');
+  const regDateCol = masterHeaders.indexOf('Registration Date');
 
-  if (programCol === -1 || siteDisplayCol === -1) {
+  if (programCol === -1 || siteDisplayCol === -1 || weekNumberCol === -1) {
     throw new Error('Required columns not found in Master Data');
   }
 
-  // Count registrations by program
+  // TABLE 1: Process Date Snapshot (columns A-E)
+  // Only initialize headers if this is a new sheet
+  if (isNewSheet) {
+    const headers1 = ['Updated', 'Camp', 'SAY', 'NEB', 'GS'];
+    regSheet.getRange(1, 1, 1, headers1.length).setValues([headers1]);
+    regSheet.getRange(1, 1, 1, headers1.length)
+      .setFontWeight('bold')
+      .setBackground('#34a853')
+      .setFontColor('white');
+  }
+
+  // Count registrations by program (excluding Pre-Camp)
   let campCount = 0;
   let sayCount = 0;
   let nebCount = 0;
@@ -597,6 +603,12 @@ function recordRegistrationSnapshot() {
     const row = masterData[i];
     const program = normalizeProgram(row[programCol]);
     const site = row[siteDisplayCol];
+    const weekNumber = row[weekNumberCol];
+
+    // Skip Pre-Camp weeks
+    if (weekNumber && String(weekNumber).toLowerCase().includes('pre-camp')) {
+      continue;
+    }
 
     if (program === 'Camp Winnebago') {
       campCount++;
@@ -615,17 +627,19 @@ function recordRegistrationSnapshot() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  // Check if we already have an entry for today
-  const regData = regSheet.getDataRange().getValues();
+  // Check if we already have an entry for today in Table 1
+  const existingData = regSheet.getDataRange().getValues();
   let todayRowIndex = -1;
 
-  for (let i = 1; i < regData.length; i++) {
-    const rowDate = new Date(regData[i][0]);
-    rowDate.setHours(0, 0, 0, 0);
+  for (let i = 1; i < existingData.length; i++) {
+    if (existingData[i][0]) {
+      const rowDate = new Date(existingData[i][0]);
+      rowDate.setHours(0, 0, 0, 0);
 
-    if (rowDate.getTime() === today.getTime()) {
-      todayRowIndex = i + 1; // Convert to 1-based row number
-      break;
+      if (rowDate.getTime() === today.getTime()) {
+        todayRowIndex = i + 1; // Convert to 1-based row number
+        break;
+      }
     }
   }
 
@@ -638,5 +652,81 @@ function recordRegistrationSnapshot() {
     // Append new row
     const lastRow = regSheet.getLastRow();
     regSheet.getRange(lastRow + 1, 1, 1, newRow.length).setValues([newRow]);
+  }
+
+  // TABLE 2: Registration Date Table (columns H-L, 2 columns away)
+  // Initialize headers if new sheet
+  if (isNewSheet) {
+    const headers2 = ['Reg Count', 'Camp', 'SAY', 'NEB', 'GS'];
+    regSheet.getRange(1, 8, 1, headers2.length).setValues([headers2]);
+    regSheet.getRange(1, 8, 1, headers2.length)
+      .setFontWeight('bold')
+      .setBackground('#34a853')
+      .setFontColor('white');
+  }
+
+  // Group registrations by registration date
+  const regDateMap = new Map();
+
+  for (let i = 1; i < masterData.length; i++) {
+    const row = masterData[i];
+    const program = normalizeProgram(row[programCol]);
+    const site = row[siteDisplayCol];
+    const weekNumber = row[weekNumberCol];
+    const regDate = row[regDateCol];
+
+    // Skip Pre-Camp weeks
+    if (weekNumber && String(weekNumber).toLowerCase().includes('pre-camp')) {
+      continue;
+    }
+
+    // Skip if no registration date
+    if (!regDate) continue;
+
+    // Normalize the date (remove time component)
+    const dateObj = new Date(regDate);
+    dateObj.setHours(0, 0, 0, 0);
+    const dateKey = dateObj.getTime();
+
+    if (!regDateMap.has(dateKey)) {
+      regDateMap.set(dateKey, {
+        date: dateObj,
+        camp: 0,
+        say: 0,
+        neb: 0,
+        gs: 0
+      });
+    }
+
+    const counts = regDateMap.get(dateKey);
+
+    if (program === 'Camp Winnebago') {
+      counts.camp++;
+    } else if (program === 'Adventure Camps (SAY/NEB)') {
+      if (site === 'SAY') {
+        counts.say++;
+      } else if (site === 'NEB') {
+        counts.neb++;
+      }
+    } else if (program === 'Adventure Camp (Good Shepherd)') {
+      counts.gs++;
+    }
+  }
+
+  // Convert map to sorted array
+  const regDateRows = Array.from(regDateMap.values())
+    .sort((a, b) => a.date.getTime() - b.date.getTime())
+    .map(item => [item.date, item.camp, item.say, item.neb, item.gs]);
+
+  // Clear old Table 2 data (keep header, clear everything below)
+  const lastRow = regSheet.getLastRow();
+  if (lastRow > 1) {
+    // Clear columns H-L from row 2 onwards
+    regSheet.getRange(2, 8, lastRow - 1, 5).clearContent();
+  }
+
+  // Write new Table 2 data
+  if (regDateRows.length > 0) {
+    regSheet.getRange(2, 8, regDateRows.length, 5).setValues(regDateRows);
   }
 }
