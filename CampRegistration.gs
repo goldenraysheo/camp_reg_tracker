@@ -9,6 +9,7 @@
 const PASTE_SHEET = "Paste Report";
 const MASTER_SHEET = "Master Data";
 const CANCEL_SHEET = "Cancellations";
+const REG_RECORDED_SHEET = "Reg Recorded";
 
 // Column indices in CSV (0-based)
 const COL = {
@@ -28,6 +29,7 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('📊 Camp Registration')
     .addItem('▶️ Process Updates', 'processRosterUpdate')
+    .addItem('📈 Record Registration Snapshot', 'recordRegistrationSnapshot')
     .addToUi();
 }
 
@@ -98,6 +100,10 @@ function processRosterUpdate() {
     // Step 6.5: Organize tabs and navigate to Overview Dashboard
     ss.toast('Finalizing...', '⏳ Working', -1);
     organizeTabs(ss);
+
+    // Step 6.75: Record registration snapshot
+    ss.toast('Recording snapshot...', '⏳ Working', -1);
+    recordRegistrationSnapshot();
 
     // Step 7: Clear Paste Report
     pasteSheet.clear();
@@ -534,5 +540,103 @@ function organizeTabs(ss) {
   const overviewSheet = ss.getSheetByName('Overview Dashboard');
   if (overviewSheet) {
     ss.setActiveSheet(overviewSheet);
+  }
+}
+
+/**
+ * Record a snapshot of current registration counts
+ * Creates a time-series record of registrations by program
+ * This captures growth AND cancellations over time
+ */
+function recordRegistrationSnapshot() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const masterSheet = ss.getSheetByName(MASTER_SHEET);
+
+  if (!masterSheet) {
+    // No Master Data yet, nothing to record
+    return;
+  }
+
+  // Get or create Reg Recorded sheet
+  let regSheet = ss.getSheetByName(REG_RECORDED_SHEET);
+  if (!regSheet) {
+    regSheet = ss.insertSheet(REG_RECORDED_SHEET);
+
+    // Create headers
+    const headers = ['Updated', 'Camp', 'SAY', 'NEB', 'GS'];
+    regSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    regSheet.getRange(1, 1, 1, headers.length)
+      .setFontWeight('bold')
+      .setBackground('#34a853')
+      .setFontColor('white');
+    regSheet.setFrozenRows(1);
+
+    // Hide the sheet (users can unhide if needed)
+    regSheet.hideSheet();
+  }
+
+  // Read Master Data
+  const masterData = masterSheet.getDataRange().getValues();
+  const masterHeaders = masterData[0];
+
+  // Find column indices
+  const programCol = masterHeaders.indexOf('Program');
+  const siteDisplayCol = masterHeaders.indexOf('SiteDisplay');
+
+  if (programCol === -1 || siteDisplayCol === -1) {
+    throw new Error('Required columns not found in Master Data');
+  }
+
+  // Count registrations by program
+  let campCount = 0;
+  let sayCount = 0;
+  let nebCount = 0;
+  let gsCount = 0;
+
+  for (let i = 1; i < masterData.length; i++) {
+    const row = masterData[i];
+    const program = normalizeProgram(row[programCol]);
+    const site = row[siteDisplayCol];
+
+    if (program === 'Camp Winnebago') {
+      campCount++;
+    } else if (program === 'Adventure Camps (SAY/NEB)') {
+      if (site === 'SAY') {
+        sayCount++;
+      } else if (site === 'NEB') {
+        nebCount++;
+      }
+    } else if (program === 'Adventure Camp (Good Shepherd)') {
+      gsCount++;
+    }
+  }
+
+  // Get today's date (formatted as date only, no time)
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Check if we already have an entry for today
+  const regData = regSheet.getDataRange().getValues();
+  let todayRowIndex = -1;
+
+  for (let i = 1; i < regData.length; i++) {
+    const rowDate = new Date(regData[i][0]);
+    rowDate.setHours(0, 0, 0, 0);
+
+    if (rowDate.getTime() === today.getTime()) {
+      todayRowIndex = i + 1; // Convert to 1-based row number
+      break;
+    }
+  }
+
+  const newRow = [today, campCount, sayCount, nebCount, gsCount];
+
+  if (todayRowIndex > 0) {
+    // Update existing row for today
+    regSheet.getRange(todayRowIndex, 1, 1, newRow.length).setValues([newRow]);
+  } else {
+    // Append new row
+    const lastRow = regSheet.getLastRow();
+    regSheet.getRange(lastRow + 1, 1, 1, newRow.length).setValues([newRow]);
   }
 }
