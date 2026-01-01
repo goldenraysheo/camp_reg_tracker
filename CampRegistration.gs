@@ -609,16 +609,15 @@ function recordRegistrationSnapshot() {
       continue;
     }
 
-    if (program === 'Camp Winnebago') {
-      campCount++;
-    } else if (program === 'Adventure Camps (SAY/NEB)') {
-      if (site === 'SAY') {
-        sayCount++;
-      } else if (site === 'NEB') {
-        nebCount++;
-      }
-    } else if (program === 'Adventure Camp (Good Shepherd)') {
+    // Count by SiteDisplay (simpler and more reliable)
+    if (site === 'SAY') {
+      sayCount++;
+    } else if (site === 'NEB') {
+      nebCount++;
+    } else if (site === 'Good Shep') {
       gsCount++;
+    } else if (program === 'Camp Winnebago') {
+      campCount++;
     }
   }
 
@@ -704,16 +703,15 @@ function recordRegistrationSnapshot() {
 
     const counts = regDateMap.get(dateKey);
 
-    if (program === 'Camp Winnebago') {
-      counts.camp++;
-    } else if (program === 'Adventure Camps (SAY/NEB)') {
-      if (site === 'SAY') {
-        counts.say++;
-      } else if (site === 'NEB') {
-        counts.neb++;
-      }
-    } else if (program === 'Adventure Camp (Good Shepherd)') {
+    // Count by SiteDisplay (simpler and more reliable)
+    if (site === 'SAY') {
+      counts.say++;
+    } else if (site === 'NEB') {
+      counts.neb++;
+    } else if (site === 'Good Shep') {
       counts.gs++;
+    } else if (program === 'Camp Winnebago') {
+      counts.camp++;
     }
   }
 
