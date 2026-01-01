@@ -29,7 +29,6 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('📊 Camp Registration')
     .addItem('▶️ Process Updates', 'processRosterUpdate')
-    .addItem('📈 Record Registration Snapshot', 'recordRegistrationSnapshot')
     .addToUi();
 }
 
@@ -628,16 +627,17 @@ function recordRegistrationSnapshot() {
   today.setHours(0, 0, 0, 0);
 
   // Check if we already have an entry for today in Table 1
-  const existingData = regSheet.getDataRange().getValues();
+  // We need to check only column A (not the entire sheet)
+  const columnAValues = regSheet.getRange(2, 1, Math.max(1, regSheet.getLastRow() - 1), 1).getValues();
   let todayRowIndex = -1;
 
-  for (let i = 1; i < existingData.length; i++) {
-    if (existingData[i][0]) {
-      const rowDate = new Date(existingData[i][0]);
+  for (let i = 0; i < columnAValues.length; i++) {
+    if (columnAValues[i][0]) {
+      const rowDate = new Date(columnAValues[i][0]);
       rowDate.setHours(0, 0, 0, 0);
 
       if (rowDate.getTime() === today.getTime()) {
-        todayRowIndex = i + 1; // Convert to 1-based row number
+        todayRowIndex = i + 2; // Convert to 1-based row number (i is 0-based, +2 because we started from row 2)
         break;
       }
     }
@@ -649,9 +649,14 @@ function recordRegistrationSnapshot() {
     // Update existing row for today
     regSheet.getRange(todayRowIndex, 1, 1, newRow.length).setValues([newRow]);
   } else {
-    // Append new row
-    const lastRow = regSheet.getLastRow();
-    regSheet.getRange(lastRow + 1, 1, 1, newRow.length).setValues([newRow]);
+    // Append new row - find last row with data in column A
+    let lastRowInTableOne = 1; // Start at header
+    for (let i = 0; i < columnAValues.length; i++) {
+      if (columnAValues[i][0]) {
+        lastRowInTableOne = i + 2; // Convert to 1-based row number
+      }
+    }
+    regSheet.getRange(lastRowInTableOne + 1, 1, 1, newRow.length).setValues([newRow]);
   }
 
   // TABLE 2: Registration Date Table (columns H-L, 2 columns away)
