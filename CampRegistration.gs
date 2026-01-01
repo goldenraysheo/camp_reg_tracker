@@ -690,7 +690,6 @@ function recordRegistrationSnapshot() {
 
     if (!regDateMap.has(dateKey)) {
       regDateMap.set(dateKey, {
-        date: dateObj,
         camp: 0,
         say: 0,
         neb: 0,
@@ -713,20 +712,27 @@ function recordRegistrationSnapshot() {
     }
   }
 
-  // Convert map to sorted array
-  const regDateRows = Array.from(regDateMap.values())
-    .sort((a, b) => a.date.getTime() - b.date.getTime())
-    .map(item => [item.date, item.camp, item.say, item.neb, item.gs]);
+  // Generate ALL dates from 12/1/2025 to 9/1/2026
+  const startDate = new Date(2025, 11, 1); // Dec 1, 2025 (month is 0-indexed)
+  const endDate = new Date(2026, 8, 1);    // Sep 1, 2026
+  const allDates = [];
+
+  for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+    const dateKey = new Date(d).getTime();
+    const counts = regDateMap.get(dateKey) || { camp: 0, say: 0, neb: 0, gs: 0 };
+    allDates.push([new Date(d), counts.camp, counts.say, counts.neb, counts.gs]);
+  }
 
   // Clear old Table 2 data (keep header, clear everything below)
   const lastRow = regSheet.getLastRow();
-  if (lastRow > 1) {
+  const maxCols = regSheet.getMaxColumns();
+  if (lastRow > 1 && maxCols >= 12) {
     // Clear columns H-L from row 2 onwards
     regSheet.getRange(2, 8, lastRow - 1, 5).clearContent();
   }
 
   // Write new Table 2 data
-  if (regDateRows.length > 0) {
-    regSheet.getRange(2, 8, regDateRows.length, 5).setValues(regDateRows);
+  if (allDates.length > 0) {
+    regSheet.getRange(2, 8, allDates.length, 5).setValues(allDates);
   }
 }
